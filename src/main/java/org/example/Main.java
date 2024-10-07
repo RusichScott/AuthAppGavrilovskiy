@@ -106,9 +106,9 @@ public class Main {
         String passwordHash = hashPassword(password);
 
         String position = assignPosition(scanner);
-        String id = generateID(position);
+        String id = generateID(position, connection);
         BigDecimal salary = generateSalary(position);
-        String login = generateLogin(patronymic, name, surname);
+        String login = generateLogin(patronymic, name, surname, connection);
 
         String sql = "INSERT INTO auth_users (id, name, surname, patronymic, salary, login, password, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
@@ -124,6 +124,7 @@ public class Main {
             System.out.println("Регистрация успешна! Ваш логин: " + login);
         }
     }
+
     private static String hashPassword(String password) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -140,7 +141,7 @@ public class Main {
         }
     }
 
-    private static String generateID(String position) {
+    private static String generateID(String position, Connection connection) throws SQLException {
         String prefix;
         switch (position.toLowerCase()) {
             case "manager":
@@ -156,15 +157,52 @@ public class Main {
                 throw new IllegalArgumentException("Неизвестная должность: " + position);
         }
 
-        String idNumber = String.format("%06d", lastId++);
-        return prefix + "-" + idNumber;
-    }
-    private static String generateLogin(String lastName, String firstName, String middleName) {
-        String englishLastName = convertToEnglish(lastName);
-        String initialFirstName = firstName.toLowerCase().charAt(0) + ".";
-        String initialMiddleName = middleName.toLowerCase().charAt(0) + ".";
+        String sql = "SELECT MAX(SUBSTRING(id FROM 3 FOR 6)) FROM auth_users WHERE id LIKE ?";
+        try (PreparedStatement pstmt = connection.prepareStatement(sql)) {
+            pstmt.setString(1, prefix + "-%");
+            ResultSet rs = pstmt.executeQuery();
 
-        return (englishLastName + "." + initialFirstName + initialMiddleName).toLowerCase();
+            String idNumber = "000001";
+            if (rs.next()) {
+                int maxId = rs.getInt(1);
+                idNumber = String.format("%06d", maxId + 1);
+            }
+
+            return prefix + "-" + idNumber;
+        }
+    }
+
+    private static String generateLogin(String lastName, String firstName, String middleName, Connection connection) throws SQLException {
+        String englishLastName = convertToEnglish(lastName);
+        String englishFirstName = convertToEnglish(firstName);
+        String englishMiddleName = convertToEnglish(middleName);
+
+        String initialFirstName = (firstName != null && !firstName.isEmpty()) ? englishFirstName.toLowerCase().charAt(0) + "" : "";
+        String initialMiddleName = (middleName != null && !middleName.isEmpty()) ? englishMiddleName.toLowerCase().charAt(0) + "" : "";
+
+        String baseLogin = englishLastName + "." + initialFirstName + "." + initialMiddleName;
+
+        baseLogin = baseLogin.replaceAll("[^a-z0-9.]", "");
+
+        String login = baseLogin;
+        int count = 1;
+        while (isLoginExists(login, connection)) {
+            login = baseLogin + count;
+            count++;
+        }
+        return login;
+    }
+
+    private static boolean isLoginExists(String login, Connection connection) throws SQLException{
+        String sql = "SELECT COUNT(*) FROM auth_users WHERE login = ?";
+        try(PreparedStatement pstmt = connection.prepareStatement(sql)){
+            pstmt.setString(1, login);
+            ResultSet rs = pstmt.executeQuery();
+            if(rs.next()){
+                return rs.getInt(1) > 0;
+            }
+        }
+        return false;
     }
 
     private static String convertToEnglish(String cyrillic) {
